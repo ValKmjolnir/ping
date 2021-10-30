@@ -34,15 +34,15 @@ sockaddr_in dst_addr;
 
 struct ip{
 	uint8_t ver;
-	uint8_t tos;
-	uint16_t len;
-	uint16_t id;
-	uint16_t flag;
-	uint8_t ttl;
+	uint8_t tos; // type of service
+	uint16_t len;// total length
+	uint16_t id; // identification
+	uint16_t off;// fragment offset field
+	uint8_t ttl; // time to live
 	uint8_t proto;
 	uint16_t chksum;
-	uint32_t srcip;
-	uint32_t dstip;
+	in_addr srcip;
+	in_addr dstip;
 };
 
 struct icmp{
@@ -56,8 +56,22 @@ struct icmp{
 
 struct result{
 	bool succ;
+#ifdef _WIN32
 	clock_t tm;
+#else
+	timeval tm;
+#endif
 }res[128];
+
+#ifndef _WIN32
+void tv_sub(timeval* out,timeval* in){
+	if((out->tv_usec-=in->tv_usec)<0){
+		--out->tv_sec;
+		out->tv_usec+=1000000;
+	}
+	out->tv_sec-=in->tv_sec;
+}
+#endif
 
 uint16_t chksum(uint16_t* buff,int size){
 	uint32_t sum=0;
@@ -74,7 +88,7 @@ uint16_t chksum(uint16_t* buff,int size){
 
 void decode(char* buff,int size){
 	ip* pkg=(ip*)buff;
-	const int ipheadlen=20;
+	const int ipheadlen=(pkg->ver&0xf)<<2;
 	if(size<ipheadlen+sizeof(icmp)){
 		std::cout<<"ip header size error\n";
 		return;
@@ -87,7 +101,22 @@ void decode(char* buff,int size){
 		std::cout<<"id error\n";
 		return;
 	}
-	printf("%d bytes time=%.2fms ttl=%d\n",size-20,1000.0*((float)(clock()-res[seq].tm))/CLOCKS_PER_SEC,pkg->ttl);
+#ifdef _WIN32
+	clock_t end=clock();
+#else
+	timeval end;
+	gettimeofday(&end,nullptr);
+	tv_sub(&end,&res[seq].tm);
+#endif
+	printf(
+		"%d bytes time=%.2fms ttl=%d\n",
+		size-20,
+#ifdef _WIN32
+		1000.0*(end-res[seq].tm)/(CLOCKS_PER_SEC*1.0),
+#else
+		(end.tv_sec*1000.0+end.tv_usec/1000.0),
+#endif
+		pkg->ttl);
 }
 
 void send_ping(){
@@ -100,11 +129,15 @@ void send_ping(){
 		pkg->seq=htons(i);// host seq to net seq
 		pkg->chksum=0;// set checksum to 0 first
 		pkg->chksum=chksum((uint16_t*)data,bytes);
+#ifdef _WIN32
+		res[i].tm=clock();
+#else
+		gettimeofday(&res[i].tm,nullptr);
+#endif
 		if(sendto(sd,data,bytes,0,(sockaddr*)&dst_addr,sizeof(sockaddr))==-1){
 			std::cout<<"failed to send\n";
 			std::exit(-1);
 		}
-		res[i].tm=clock();
 		sleep(1);
 	}
 }
